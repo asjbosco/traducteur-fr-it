@@ -3,6 +3,8 @@
 
     <!-- Uniquement pour télécharger les modèles de langue la première fois -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Dictée « appuyer pour parler » -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <!-- Visibilité des services utilisés (Android 11+) -->
     <queries>
@@ -10,7 +12,7 @@
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
         <intent>
-            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+            <action android:name="android.speech.RecognitionService" />
         </intent>
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />

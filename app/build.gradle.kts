@@ -13,8 +13,8 @@ android {
         applicationId = "fr.manu.traducteur"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
@@ -57,6 +57,7 @@ dependencies {
 
     // Reconnaissance de texte sur photo (modèle latin inclus dans l'APK, hors ligne)
     implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     // Historique
     implementation("androidx.room:room-runtime:2.6.1")
