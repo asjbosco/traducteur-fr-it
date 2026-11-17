@@ -1,6 +1,7 @@
 package fr.manu.traducteur.ui
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import fr.manu.traducteur.TraducteurApp
@@ -24,6 +25,7 @@ data class UiState(
     val output: String = "",
     val direction: Direction = Direction.FR_IT,
     val translating: Boolean = false,
+    val scanning: Boolean = false,
     val models: ModelState = ModelState.CHECKING,
     val error: String? = null,
 )
@@ -31,6 +33,7 @@ data class UiState(
 class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     private val traducteurApp = app as TraducteurApp
     private val translator = traducteurApp.translator
+    private val scanner = traducteurApp.scanner
     private val dao: TranslationDao = traducteurApp.database.dao()
 
     private val _state = MutableStateFlow(UiState())
@@ -51,6 +54,35 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onInput(text: String) = _state.update { it.copy(input = text, error = null) }
+
+    fun showError(message: String) = _state.update { it.copy(error = message) }
+
+    /** Texte dicté au micro : on le place dans la zone de saisie et on traduit. */
+    fun onSpoken(text: String) {
+        _state.update { it.copy(input = text, error = null) }
+        if (_state.value.models == ModelState.READY) translate()
+    }
+
+    /** Lit le texte d'une photo (OCR hors ligne) puis le traduit. */
+    fun scanImage(uri: Uri) {
+        _state.update { it.copy(scanning = true, error = null) }
+        viewModelScope.launch {
+            runCatching { scanner.read(getApplication(), uri) }
+                .onSuccess { text ->
+                    if (text.isBlank()) {
+                        _state.update { it.copy(scanning = false, error = "Aucun texte trouvé sur l'image.") }
+                    } else {
+                        _state.update { it.copy(scanning = false, input = text, output = "") }
+                        if (_state.value.models == ModelState.READY) translate()
+                    }
+                }
+                .onFailure { e ->
+                    _state.update {
+                        it.copy(scanning = false, error = "Lecture de l'image impossible : ${e.localizedMessage ?: "erreur inconnue"}")
+                    }
+                }
+        }
+    }
 
     fun swap() = _state.update {
         it.copy(direction = it.direction.reversed(), input = it.output, output = it.input)

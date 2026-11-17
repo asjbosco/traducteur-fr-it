@@ -9,9 +9,9 @@ Application Android qui traduit le français vers l'italien (et l'inverse), **ho
 | Saisie au clavier | ✅ |
 | Traduction hors ligne (modèles téléchargés une fois, ~60 Mo) | ✅ |
 | Historique des traductions (recherche, favoris, suppression) | ✅ |
-| Saisie vocale (micro) | à venir |
-| Traduction depuis une photo (OCR) | à venir |
-| Lecture à voix haute (synthèse vocale) | à venir |
+| Saisie vocale (micro), en français ou en italien | ✅ (hors ligne si le pack de langue est installé sur le téléphone) |
+| Traduction depuis une photo ou la galerie (OCR) | ✅ hors ligne |
+| Lecture à voix haute du texte et de la traduction | ✅ (voix du téléphone) |
 
 ## Technique
 
