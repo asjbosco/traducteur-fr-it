@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import fr.manu.traducteur.TraducteurApp
 import fr.manu.traducteur.data.Direction
 import fr.manu.traducteur.data.Translation
+import fr.manu.traducteur.data.TranslationDao
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,8 +29,9 @@ data class UiState(
 )
 
 class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
-    private val translator = (app as TraducteurApp).translator
-    private val dao = app.database.dao()
+    private val traducteurApp = app as TraducteurApp
+    private val translator = traducteurApp.translator
+    private val dao: TranslationDao = traducteurApp.database.dao()
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -38,7 +40,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
 
     @OptIn(ExperimentalCoroutinesApi::class)
     val history: StateFlow<List<Translation>> = query
-        .flatMapLatest { q -> if (q.isBlank()) dao.all() else dao.search(q.trim()) }
+        .flatMapLatest { q: String -> if (q.isBlank()) dao.all() else dao.search(q.trim()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
@@ -105,7 +107,7 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
         it.copy(
             input = t.sourceText,
             output = t.translatedText,
-            direction = Direction.entries.first { d -> d.source == t.sourceLang },
+            direction = Direction.entries.first { d: Direction -> d.source == t.sourceLang },
             error = null,
         )
     }
