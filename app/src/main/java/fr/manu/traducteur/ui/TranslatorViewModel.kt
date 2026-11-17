@@ -1,6 +1,9 @@
 package fr.manu.traducteur.ui
 
 import android.app.Application
+import android.graphics.Bitmap
+import android.net.Uri
+import fr.manu.traducteur.data.TextScanner
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import fr.manu.traducteur.TraducteurApp
@@ -24,6 +27,10 @@ data class UiState(
     val output: String = "",
     val direction: Direction = Direction.FR_IT,
     val translating: Boolean = false,
+    val scanning: Boolean = false,
+    /** Image en attente de rognage (écran de recadrage affiché tant qu'elle n'est pas nulle). */
+    val cropImage: Bitmap? = null,
+    val listening: Boolean = false,
     val models: ModelState = ModelState.CHECKING,
     val error: String? = null,
 )
@@ -31,6 +38,7 @@ data class UiState(
 class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     private val traducteurApp = app as TraducteurApp
     private val translator = traducteurApp.translator
+    private val scanner = traducteurApp.scanner
     private val dao: TranslationDao = traducteurApp.database.dao()
 
     private val _state = MutableStateFlow(UiState())
@@ -51,6 +59,68 @@ class TranslatorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun onInput(text: String) = _state.update { it.copy(input = text, error = null) }
+
+    fun showError(message: String) = _state.update { it.copy(error = message) }
+
+    /** Texte en cours de dictée (affiché au fur et à mesure). */
+    fun onSpeaking(text: String) = _state.update { it.copy(input = text, listening = true, error = null) }
+
+    fun onListening(on: Boolean) = _state.update { it.copy(listening = on, error = null) }
+
+    /** Fin de la dictée (bouton relâché) : on traduit ce qui a été dit. */
+    fun onSpoken(text: String) {
+        _state.update { it.copy(input = text, listening = false, output = "") }
+        if (text.isNotBlank() && _state.value.models == ModelState.READY) translate()
+    }
+
+    /** Photo prise ou choisie : on l'ouvre dans l'écran de rognage. */
+    fun openForCrop(uri: Uri) {
+        _state.update { it.copy(scanning = true, error = null) }
+        viewModelScope.launch {
+            runCatching { TextScanner.load(getApplication(), uri) }
+                .onSuccess { bmp -> _state.update { it.copy(scanning = false, cropImage = bmp) } }
+                .onFailure { e -> scanFailed(e) }
+        }
+    }
+
+    fun rotateCrop() {
+        val bmp = _state.value.cropImage ?: return
+        viewModelScope.launch {
+            val rotated = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                TextScanner.rotate(bmp, 90f)
+            }
+            _state.update { it.copy(cropImage = rotated) }
+        }
+    }
+
+    fun cancelCrop() = _state.update { it.copy(cropImage = null) }
+
+    /** Zone validée : on lit le texte de la zone rognée (OCR hors ligne) puis on le traduit. */
+    fun confirmCrop(left: Float, top: Float, right: Float, bottom: Float) {
+        val bmp = _state.value.cropImage ?: return
+        _state.update { it.copy(cropImage = null, scanning = true, error = null) }
+        viewModelScope.launch {
+            runCatching {
+                val part = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    TextScanner.crop(bmp, left, top, right, bottom)
+                }
+                scanner.read(part)
+            }
+                .onSuccess { text ->
+                    if (text.isBlank()) {
+                        _state.update { it.copy(scanning = false, error = "Aucun texte trouvé dans la zone choisie.") }
+                    } else {
+                        _state.update { it.copy(scanning = false, input = text, output = "") }
+                        if (_state.value.models == ModelState.READY) translate()
+                    }
+                }
+                .onFailure { e -> scanFailed(e) }
+        }
+    }
+
+    private fun scanFailed(e: Throwable) = _state.update {
+        it.copy(scanning = false, error = "Lecture de l'image impossible : ${e.localizedMessage ?: "erreur inconnue"}")
+    }
 
     fun swap() = _state.update {
         it.copy(direction = it.direction.reversed(), input = it.output, output = it.input)

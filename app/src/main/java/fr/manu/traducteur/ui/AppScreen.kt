@@ -1,6 +1,15 @@
 package fr.manu.traducteur.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.content.ActivityNotFoundException
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,16 +30,20 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -46,11 +59,14 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,7 +74,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,35 +95,48 @@ import java.util.Date
 fun AppScreen(vm: TranslatorViewModel = viewModel()) {
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var confirmClear by remember { mutableStateOf(false) }
+    val state by vm.state.collectAsStateWithLifecycle()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(if (tab == 0) "Traducteur FR ↔ IT" else "Historique") },
-                actions = {
-                    if (tab == 1) {
-                        IconButton(onClick = { confirmClear = true }) {
-                            Icon(Icons.Filled.DeleteSweep, contentDescription = "Tout effacer")
+    Box(Modifier.fillMaxSize()) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(if (tab == 0) "Traducteur FR ↔ IT" else "Historique") },
+                    actions = {
+                        if (tab == 1) {
+                            IconButton(onClick = { confirmClear = true }) {
+                                Icon(Icons.Filled.DeleteSweep, contentDescription = "Tout effacer")
+                            }
                         }
-                    }
-                },
-            )
-        },
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = tab == 0, onClick = { tab = 0 },
-                    icon = { Icon(Icons.Filled.Translate, null) }, label = { Text("Traduire") },
+                    },
                 )
-                NavigationBarItem(
-                    selected = tab == 1, onClick = { tab = 1 },
-                    icon = { Icon(Icons.Filled.History, null) }, label = { Text("Historique") },
-                )
+            },
+            bottomBar = {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = tab == 0, onClick = { tab = 0 },
+                        icon = { Icon(Icons.Filled.Translate, null) }, label = { Text("Traduire") },
+                    )
+                    NavigationBarItem(
+                        selected = tab == 1, onClick = { tab = 1 },
+                        icon = { Icon(Icons.Filled.History, null) }, label = { Text("Historique") },
+                    )
+                }
+            },
+        ) { padding ->
+            Box(Modifier.padding(padding).fillMaxSize()) {
+                if (tab == 0) TranslateTab(vm) else HistoryTab(vm, onReuse = { vm.reuse(it); tab = 0 })
             }
-        },
-    ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            if (tab == 0) TranslateTab(vm) else HistoryTab(vm, onReuse = { vm.reuse(it); tab = 0 })
+        }
+
+        // Écran de rognage par-dessus le reste, après une photo ou un choix dans la galerie
+        state.cropImage?.let { bmp ->
+            CropScreen(
+                bitmap = bmp,
+                onCancel = vm::cancelCrop,
+                onRotate = vm::rotateCrop,
+                onConfirm = vm::confirmCrop,
+            )
         }
     }
 
@@ -123,6 +157,64 @@ fun AppScreen(vm: TranslatorViewModel = viewModel()) {
 private fun TranslateTab(vm: TranslatorViewModel) {
     val s by vm.state.collectAsStateWithLifecycle()
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+
+    // Lecture à voix haute
+    val speaker = remember { Speaker(context) }
+    DisposableEffect(Unit) { onDispose { speaker.shutdown() } }
+    val speak = { text: String, lang: String -> speaker.speak(text, lang)?.let(vm::showError); Unit }
+
+    // Dictée : le micro reste ouvert tant que le bouton est maintenu appuyé
+    val ptt = remember {
+        PushToTalk(
+            context,
+            onPartial = vm::onSpeaking,
+            onFinal = vm::onSpoken,
+            onError = { msg -> vm.onListening(false); vm.showError(msg) },
+        )
+    }
+    DisposableEffect(Unit) { onDispose { ptt.destroy() } }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) vm.showError("Micro autorisé : maintiens le bouton appuyé pendant que tu parles.")
+        else vm.showError("Sans accès au micro, la dictée est impossible.")
+    }
+    val hasMic = {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+    val micDown: () -> Boolean = {
+        if (!hasMic()) {
+            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+            false
+        } else {
+            speaker.stop()
+            vm.onListening(true)
+            ptt.start(if (s.direction.source == "fr") "fr-FR" else "it-IT")
+            true
+        }
+    }
+    val micUp = { ptt.stop() }
+
+    // Photo : appareil photo (image pleine résolution) ou galerie
+    var photoUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val uri = photoUri
+        if (ok && uri != null) vm.openForCrop(uri)
+    }
+    val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.openForCrop(uri)
+    }
+    val takePhoto = {
+        val dir = File(context.cacheDir, "photos").apply { mkdirs() }
+        val file = File(dir, "photo.jpg")
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        photoUri = uri
+        try {
+            cameraLauncher.launch(uri)
+        } catch (e: ActivityNotFoundException) {
+            vm.showError("Aucune application appareil photo trouvée.")
+        }
+    }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -151,6 +243,30 @@ private fun TranslateTab(vm: TranslatorViewModel) {
             keyboardActions = KeyboardActions(onDone = { vm.translate() }),
         )
 
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+            HoldToTalkButton(listening = s.listening, onDown = micDown, onUp = micUp)
+            ActionButton(Icons.Filled.CameraAlt, "Photo", onClick = takePhoto)
+            ActionButton(Icons.Filled.Image, "Galerie") {
+                galleryLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            }
+            ActionButton(Icons.AutoMirrored.Filled.VolumeUp, "Écouter", enabled = s.input.isNotBlank()) {
+                speak(s.input, s.direction.source)
+            }
+        }
+
+        if (s.listening) {
+            Text(
+                "Je t'écoute… relâche le bouton quand tu as fini.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+
+        if (s.scanning) {
+            Text("Lecture du texte de l'image…", style = MaterialTheme.typography.bodySmall)
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        }
+
         Button(
             onClick = vm::translate,
             enabled = s.models == ModelState.READY && s.input.isNotBlank() && !s.translating,
@@ -173,6 +289,9 @@ private fun TranslateTab(vm: TranslatorViewModel) {
                 Column(Modifier.padding(16.dp)) {
                     SelectionContainer { Text(s.output, style = MaterialTheme.typography.bodyLarge) }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        IconButton(onClick = { speak(s.output, s.direction.target) }) {
+                            Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = "Écouter la traduction")
+                        }
                         IconButton(onClick = { clipboard.setText(AnnotatedString(s.output)) }) {
                             Icon(Icons.Filled.ContentCopy, contentDescription = "Copier")
                         }
@@ -180,6 +299,52 @@ private fun TranslateTab(vm: TranslatorViewModel) {
                 }
             }
         }
+    }
+}
+
+/** Bouton micro : appuyer et maintenir pour parler, relâcher pour traduire. */
+@Composable
+private fun HoldToTalkButton(listening: Boolean, onDown: () -> Boolean, onUp: () -> Unit) {
+    val down by rememberUpdatedState(onDown)
+    val up by rememberUpdatedState(onUp)
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Surface(
+            shape = CircleShape,
+            color = if (listening) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondaryContainer,
+            contentColor = if (listening) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier
+                .size(if (listening) 52.dp else 40.dp)
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onPress = {
+                            if (down()) {
+                                tryAwaitRelease()
+                                up()
+                            }
+                        },
+                    )
+                },
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Mic, contentDescription = "Maintenir pour parler")
+            }
+        }
+        Text(if (listening) "Relâcher" else "Maintenir", style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+@Composable
+private fun ActionButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        androidx.compose.material3.FilledTonalIconButton(onClick = onClick, enabled = enabled) {
+            Icon(icon, contentDescription = label)
+        }
+        Text(label, style = MaterialTheme.typography.labelSmall)
     }
 }
 

@@ -13,8 +13,8 @@ android {
         applicationId = "fr.manu.traducteur"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
@@ -54,6 +54,10 @@ dependencies {
     // Traduction hors ligne (modèles téléchargés une fois sur l'appareil)
     implementation("com.google.mlkit:translate:17.0.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
+
+    // Reconnaissance de texte sur photo (modèle latin inclus dans l'APK, hors ligne)
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     // Historique
     implementation("androidx.room:room-runtime:2.6.1")
